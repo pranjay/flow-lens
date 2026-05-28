@@ -1,36 +1,10 @@
 """
-data/transformer.py
-
-Converts raw Barchart API response dicts into typed OptionContract objects.
-
-Field mapping (confirmed from live endpoint):
-  API field               → OptionContract field
-  -----------------------------------------
-  baseSymbol              → ticker
-  symbolType              → option_type  (normalised to "Call"/"Put")
-  strikePrice             → strike
-  expirationDate          → expiration   (parsed from YYYYMMDD or YYYY-MM-DD)
-  daysToExpiration        → dte          (from API, but we recalculate to be safe)
-  bidPrice                → bid
-  askPrice                → ask
-  baseLastPrice           → underlying_price
-  volatility              → volatility   (divide by 100 — API returns e.g. 45.2)
-  delta                   → delta        (NEW vs C#)
-  moneyness               → moneyness    (NEW vs C#: "ITM"/"ATM"/"OTM")
-  volume                  → volume
-  openInterest            → open_interest
-  tradeTime               → trade_time   (unix timestamp)
-  volumeOpenInterestRatio → stored in vol_oi_ratio (but we recalculate from raw)
-
-Not mapped (not needed for signal logic):
-  baseSymbolType, symbolCode, hasOptions
+data/transformer.py — raw API dict → typed OptionContract + quality filters
 """
 from __future__ import annotations
-
 import logging
 from datetime import date, datetime, timezone
 from typing import Optional
-
 from config import OptionsFilterConfig
 from models.options import OptionContract
 
@@ -56,16 +30,13 @@ class OptionsTransformer:
         log.info("Parsed %d rows → kept %d, filtered %d", len(raw_rows), len(contracts), skipped)
         return contracts
 
-    # ── Parsing ────────────────────────────────────────────────────────────────
-
     def _parse_row(self, row: dict) -> Optional[OptionContract]:
-        raw = row.get("raw", row)   # prefer the numeric 'raw' sub-object
+        raw = row.get("raw", row)
         try:
             expiration = self._parse_date(
                 raw.get("expirationDate") or row.get("expirationDate", "")
             )
             dte = (expiration - date.today()).days
-
             return OptionContract(
                 symbol           = str(row.get("symbol", "")),
                 ticker           = str(raw.get("baseSymbol", "")),
@@ -75,6 +46,7 @@ class OptionsTransformer:
                 dte              = dte,
                 bid              = self._f(raw.get("bidPrice", 0)),
                 ask              = self._f(raw.get("askPrice", 0)),
+                last             = self._f(raw.get("lastPrice", 0)),
                 underlying_price = self._f(raw.get("baseLastPrice", 0)),
                 volatility       = self._f(raw.get("volatility", 0)) / 100,
                 delta            = self._f(raw.get("delta", 0)),
@@ -87,23 +59,15 @@ class OptionsTransformer:
             log.debug("Skipping malformed row %s: %s", row.get("symbol"), exc)
             return None
 
-    # ── Post-fetch quality filters ─────────────────────────────────────────────
-
     def _passes_filters(self, c: OptionContract) -> bool:
         cfg = self.cfg
-        # DTE window — API already filters daysToExpiration > 0,
-        # but we add min_dte (7) to cut 0DTE noise and max_dte for deep LEAPS
         if not (cfg.min_dte <= c.dte <= cfg.max_dte):
             return False
-        # Vol/OI ratio — our key signal-quality gate (5x default vs 1x in C#)
         if c.vol_oi_ratio < cfg.min_vol_oi_ratio:
             return False
-        # Premium size — meaningful bet floor
         if c.premium_usd < cfg.min_premium_usd:
             return False
         return True
-
-    # ── Coercion helpers ───────────────────────────────────────────────────────
 
     @staticmethod
     def _f(val) -> float:
