@@ -182,7 +182,7 @@ class BarchartClient:
         Uses manual string joining (not urllib.urlencode) to preserve the
         Barchart filter syntax:  gt(x,y)=  between(x,a,b)=  in(x,(a,b,c))=
         """
-        next_date = (trade_date + timedelta(days=1)).isoformat()
+        next_date = trade_date + timedelta(days=1)
 
         params: list[tuple[str, str]] = [
             ("fields",               OPTION_FIELDS),
