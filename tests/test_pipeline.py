@@ -130,6 +130,8 @@ class TestPersistenceTracker:
         with tempfile.TemporaryDirectory() as d:
             t = PersistenceTracker(Path(d))
             t.annotate([self._bias("NVDA", "Long")])
+            # Simulate a new day by writing a past date into the ledger
+            t._ledger["NVDA"]["last_seen"] = "2026-01-01"
             day2 = [self._bias("NVDA", "Long")]
             t.annotate(day2)
             assert day2[0].consecutive_days == 2
@@ -138,6 +140,7 @@ class TestPersistenceTracker:
         with tempfile.TemporaryDirectory() as d:
             t = PersistenceTracker(Path(d))
             t.annotate([self._bias("NVDA", "Long")])
+            t._ledger["NVDA"]["last_seen"] = "2026-01-01"
             day2 = [self._bias("NVDA", "Short")]
             t.annotate(day2)
             assert day2[0].consecutive_days == 1
@@ -145,10 +148,25 @@ class TestPersistenceTracker:
     def test_three_day_streak(self):
         with tempfile.TemporaryDirectory() as d:
             t = PersistenceTracker(Path(d))
-            for _ in range(3):
+            for i in range(3):
                 biases = [self._bias("TSLA", "Short")]
                 t.annotate(biases)
+                # Simulate next day for all but the last iteration
+                if i < 2:
+                    t._ledger["TSLA"]["last_seen"] = f"2026-01-0{i+1}"
             assert biases[0].consecutive_days == 3
+
+    def test_rerun_same_day_does_not_increment(self):
+        """Core fix: running pipeline twice same day must not double-count."""
+        with tempfile.TemporaryDirectory() as d:
+            t = PersistenceTracker(Path(d))
+            t.annotate([self._bias("NVDA", "Long")])
+            t._ledger["NVDA"]["last_seen"] = "2026-01-01"
+            t.annotate([self._bias("NVDA", "Long")])  # day 2
+            day2_count = t._ledger["NVDA"]["consecutive_days"]
+            # Run again same day — must NOT increment
+            t.annotate([self._bias("NVDA", "Long")])
+            assert t._ledger["NVDA"]["consecutive_days"] == day2_count
 
 
 # ── Signal strength ────────────────────────────────────────────────────────────
