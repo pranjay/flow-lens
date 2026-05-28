@@ -100,7 +100,7 @@ class ExcelReporter:
             dom = b.dominant_contract
             ws.append([
                 b.ticker, b.bias, b.signal_strength, b.consecutive_days,
-                b.parity, b.premium_parity,
+                b.parity_label, b.premium_parity_label,
                 round(b.total_premium, 0),
                 b.call_volume, b.put_volume,
                 round(b.call_premium, 0), round(b.put_premium, 0),
