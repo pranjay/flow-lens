@@ -1,0 +1,10 @@
+# Core — always required
+requests>=2.31.0
+openpyxl>=3.1.0
+
+# Optional — install for automatic Barchart cookie loading from browser
+# pip install browser-cookie3    # loads cookies from Firefox/Safari automatically
+# pip install python-dotenv      # reads BARCHART_COOKIE from a .env file
+
+# Development / testing
+pytest>=7.4.0
