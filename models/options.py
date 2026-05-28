@@ -1,12 +1,5 @@
 """
 models/options.py
-
-Data containers for options flow signals.
-
-Field changes vs original C# Raw model:
-  Added:   moneyness, delta  (new fields in confirmed API response)
-  Removed: midpoint          (not in confirmed API response)
-  Renamed: lastPrice → last  (lastPrice is filter-only in confirmed API; askPrice is pricing)
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -16,32 +9,24 @@ from typing import Optional
 
 @dataclass
 class OptionContract:
-    # Identifiers
-    symbol:      str    # e.g. "AAPL|250620|C|200"
-    ticker:      str    # e.g. "AAPL"
-    option_type: str    # "Call" or "Put"
+    symbol:      str
+    ticker:      str
+    option_type: str
     strike:      float
     expiration:  date
     dte:         int
-
-    # Pricing
-    bid:              float
-    ask:              float
-    underlying_price: float   # baseLastPrice — stock price
-
-    # Greeks / vol
-    volatility: float   # implied vol as decimal (0.35 = 35%)
-    delta:      float   # NEW: option delta
-    moneyness:  str     # NEW: "ITM" / "ATM" / "OTM"
-
-    # Activity
-    volume:        int
+    bid:         float
+    ask:         float
+    underlying_price: float
+    volatility:  float
+    delta:       float
+    moneyness:   str
+    volume:      int
     open_interest: int
-    trade_time:    datetime
+    trade_time:  datetime
 
-    # Derived — calculated on construction
     vol_oi_ratio: float = field(init=False)
-    premium_usd:  float = field(init=False)   # volume × mid × 100
+    premium_usd:  float = field(init=False)
 
     def __post_init__(self):
         self.vol_oi_ratio = (
@@ -61,13 +46,11 @@ class OptionContract:
 
     @property
     def expiration_label(self) -> str:
-        """e.g. '20JUN25'"""
         return self.expiration.strftime("%d%b%y").upper()
 
 
 @dataclass
 class DominantContract:
-    """The single highest-premium contract for a ticker — the actionable output."""
     ticker:           str
     option_type:      str
     strike:           float
@@ -94,7 +77,6 @@ class DominantContract:
 
 @dataclass
 class TickerBias:
-    """Aggregated signal for one underlying ticker."""
     ticker: str
 
     call_volume:   int   = 0
@@ -107,31 +89,81 @@ class TickerBias:
     put_contracts:   int = 0
     total_contracts: int = 0
 
-    oi_change:     int   = 0
-    volume_change: int   = 0
+    oi_change:        int = 0
+    volume_change:    int = 0
     consecutive_days: int = 1
 
     dominant_contract: Optional[DominantContract] = None
 
+    # ── Pure directional flags ─────────────────────────────────────────────
+
     @property
-    def parity(self) -> float:
-        if self.put_volume == 0:
-            return float("inf") if self.call_volume > 0 else 0.0
+    def is_pure_calls(self) -> bool:
+        """All qualifying contracts were calls — no puts passed the filters."""
+        return self.call_volume > 0 and self.put_volume == 0
+
+    @property
+    def is_pure_puts(self) -> bool:
+        """All qualifying contracts were puts — no calls passed the filters."""
+        return self.put_volume > 0 and self.call_volume == 0
+
+    # ── Parity ratios ──────────────────────────────────────────────────────
+
+    @property
+    def parity(self) -> Optional[float]:
+        """
+        Call/Put volume ratio. None when flow is purely one-sided —
+        the ratio is undefined (and irrelevant) when the other side is zero.
+        Use is_pure_calls / is_pure_puts to detect pure flow.
+        """
+        if self.call_volume == 0 or self.put_volume == 0:
+            return None
         return round(self.call_volume / self.put_volume, 2)
 
     @property
-    def premium_parity(self) -> float:
-        if self.put_premium == 0:
-            return float("inf") if self.call_premium > 0 else 0.0
+    def premium_parity(self) -> Optional[float]:
+        """Same as parity but weighted by premium spent."""
+        if self.call_premium == 0 or self.put_premium == 0:
+            return None
         return round(self.call_premium / self.put_premium, 2)
+
+    # ── Direction ─────────────────────────────────────────────────────────
 
     @property
     def bias(self) -> str:
-        if self.parity >= 1.5:
+        if self.is_pure_calls:
             return "Long"
-        if self.parity <= 0.67:
+        if self.is_pure_puts:
+            return "Short"
+        p = self.parity
+        if p is None:
+            return "Neutral"
+        if p >= 1.5:
+            return "Long"
+        if p <= 0.67:
             return "Short"
         return "Neutral"
+
+    @property
+    def parity_label(self) -> str:
+        """Human-readable parity — shows 'Calls only' / 'Puts only' for pure flow."""
+        if self.is_pure_calls:
+            return "Calls only"
+        if self.is_pure_puts:
+            return "Puts only"
+        p = self.parity
+        return str(p) if p is not None else "—"
+
+    @property
+    def premium_parity_label(self) -> str:
+        if self.is_pure_calls:
+            return "Calls only"
+        if self.is_pure_puts:
+            return "Puts only"
+        p = self.premium_parity
+        return str(p) if p is not None else "—"
+
+    # ── Signal quality ────────────────────────────────────────────────────
 
     @property
     def signal_strength(self) -> str:
@@ -144,7 +176,7 @@ class TickerBias:
     def __str__(self) -> str:
         dom = f" | Top: {self.dominant_contract}" if self.dominant_contract else ""
         return (
-            f"{self.ticker} | {self.bias} | Parity: {self.parity} | "
+            f"{self.ticker} | {self.bias} ({self.parity_label}) | "
             f"Premium: ${self.total_premium:,.0f} | "
             f"Strength: {self.signal_strength} | "
             f"Days: {self.consecutive_days}{dom}"
