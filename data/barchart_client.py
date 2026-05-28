@@ -53,6 +53,7 @@ OPTION_FIELDS = ",".join([
     "tradeTime",
     "symbolCode",
     "hasOptions",         # NEW vs C#: underlying has options flag
+    "lastPrice",          # re-added: infer aggressor side (last ≈ ask → buyer, last ≈ bid → seller)
 ])
 
 
