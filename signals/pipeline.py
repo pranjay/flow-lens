@@ -1,15 +1,15 @@
 """
-signals/pipeline.py
+signals/pipeline.py — Orchestrates the full Options Volume Leaders pipeline.
 
-Orchestrates the full Options Volume Leaders pipeline:
-  1. Fetch  — BarchartClient (paginated, with confirmed endpoint + date filter)
+Stage order:
+  1. Fetch  — BarchartClient (paginated)
   2. Parse  — OptionsTransformer
-  3. Signal — BiasEngine
-  4. Track  — PersistenceTracker
+  3. Signal — BiasEngine (with OI change from yesterday's ledger)
+  4. Track  — PersistenceTracker (re-run safe)
   5. Report — ExcelReporter
 """
 from __future__ import annotations
-
+import json
 import logging
 from dataclasses import dataclass
 from datetime import date
@@ -25,6 +25,8 @@ from signals.bias_engine import BiasEngine
 from signals.persistence import PersistenceTracker
 
 log = logging.getLogger(__name__)
+
+OI_LEDGER_FILENAME = "oi_ledger.json"
 
 
 @dataclass
@@ -73,9 +75,9 @@ class OptionsVolumePipeline:
 
     def __init__(
         self,
-        client:      Optional[BarchartClient]     = None,
-        cfg:         Optional[OptionsFilterConfig] = None,
-        output_dir:  Path                          = OUTPUT_DIR,
+        client:     Optional[BarchartClient]      = None,
+        cfg:        Optional[OptionsFilterConfig]  = None,
+        output_dir: Path                           = OUTPUT_DIR,
     ):
         self.cfg         = cfg or OptionsFilterConfig()
         self.client      = client or BarchartClient()
@@ -83,10 +85,14 @@ class OptionsVolumePipeline:
         self.engine      = BiasEngine()
         self.tracker     = PersistenceTracker(output_dir)
         self.reporter    = ExcelReporter(output_dir)
+        self.oi_ledger_path = output_dir / OI_LEDGER_FILENAME
 
     def run(self, trade_date: date | None = None) -> PipelineResult:
         trade_date = trade_date or date.today()
         log.info("Pipeline start — %s", trade_date)
+
+        # Load yesterday's OI for change calculation
+        prev_oi = self._load_oi_ledger()
 
         # Fetch + parse
         stock_contracts = self.transformer.transform_all(
@@ -98,25 +104,58 @@ class OptionsVolumePipeline:
                 self.client.get_options_volume_leaders("etf", self.cfg, trade_date)
             )
 
-        # Signal + persistence
-        stock_biases = self.tracker.annotate(self.engine.compute(stock_contracts))
-        etf_biases   = self.tracker.annotate(self.engine.compute(etf_contracts)) if etf_contracts else []
+        all_contracts = stock_contracts + etf_contracts
+
+        # Save today's OI to ledger (for tomorrow's change calculation)
+        self._save_oi_ledger(all_contracts)
+
+        # Compute signals
+        stock_biases = self.engine.compute(stock_contracts, prev_oi=prev_oi)
+        etf_biases   = self.engine.compute(etf_contracts,   prev_oi=prev_oi) if etf_contracts else []
+
+        # Stamp persistence (re-run safe — won't double-count same day)
+        self.tracker.annotate(stock_biases)
+        self.tracker.annotate(etf_biases)
 
         stock_biases = stock_biases[:self.cfg.top_n_tickers]
         etf_biases   = etf_biases[:self.cfg.top_n_tickers]
 
-        # Report
         report_path = self.reporter.write(
             stock_contracts, stock_biases,
-            etf_contracts, etf_biases,
+            etf_contracts,   etf_biases,
             report_date=trade_date,
         )
 
         result = PipelineResult(
             report_date=trade_date,
             stock_contracts=stock_contracts, etf_contracts=etf_contracts,
-            stock_biases=stock_biases, etf_biases=etf_biases,
+            stock_biases=stock_biases,       etf_biases=etf_biases,
             report_path=report_path,
         )
         print(result.summary())
         return result
+
+    # ── OI ledger ──────────────────────────────────────────────────────────
+
+    def _load_oi_ledger(self) -> dict[str, int]:
+        """Load previous day's OI totals per ticker."""
+        if self.oi_ledger_path.exists():
+            try:
+                with open(self.oi_ledger_path) as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, OSError):
+                log.warning("OI ledger corrupted — starting fresh")
+        return {}
+
+    def _save_oi_ledger(self, contracts: list[OptionContract]) -> None:
+        """
+        Save today's OI totals per ticker.
+        Summed across all qualifying contracts for that ticker.
+        """
+        from collections import defaultdict
+        oi_by_ticker: dict[str, int] = defaultdict(int)
+        for c in contracts:
+            oi_by_ticker[c.ticker] += c.open_interest
+        with open(self.oi_ledger_path, "w") as f:
+            json.dump(dict(oi_by_ticker), f, indent=2)
+        log.debug("OI ledger saved → %s", self.oi_ledger_path)
