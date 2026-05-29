@@ -29,6 +29,7 @@ from reports.excel_reporter import ExcelReporter
 from signals.bias_engine import BiasEngine
 from signals.oi_joiner import OIJoiner
 from signals.persistence import PersistenceTracker
+from reports.brief import print_brief
 
 log = logging.getLogger(__name__)
 OI_LEDGER_FILENAME = "oi_ledger.json"
@@ -158,7 +159,7 @@ class OptionsVolumePipeline:
             stock_biases=stock_biases,       etf_biases=etf_biases,
             report_path=report_path,
         )
-        print(result.summary())
+        print_brief(stock_biases, trade_date, etf_biases)
         return result
 
     def _load_oi_ledger(self) -> dict[str, int]:
