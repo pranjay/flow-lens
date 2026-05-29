@@ -56,7 +56,7 @@ examples:
     sub = parser.add_subparsers(dest="command")
 
     vol = sub.add_parser("opt-vol", help="run options volume leaders report")
-    vol.add_argument("--full",  action="store_true", help="print full signal detail after brief")
+    vol.add_argument("--full",  action="store_true", help="also print full signal detail (brief table is always shown)")
     vol.add_argument("--date",  type=str, default=None, metavar="YYYY-MM-DD",
                      help="run for a specific date (default: today)")
 
