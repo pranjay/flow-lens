@@ -122,6 +122,34 @@ class DominantContract:
         )
 
 
+
+@dataclass
+class OIConfirmation:
+    """
+    OI change data for one contract from the OI screener.
+    Joined to TickerBias to confirm whether volume signal has overnight backing.
+    """
+    ticker:            str
+    option_type:       str          # "Call" or "Put"
+    strike:            float
+    expiration:        date
+    expiration_label:  str
+    dte:               int
+    oi_change:         int          # raw OI growth in contracts
+    open_interest:     int
+    volume:            int
+    volatility:        float
+    delta:             float
+    moneyness:         str
+
+    @property
+    def is_call(self) -> bool:
+        return self.option_type.upper() == "CALL"
+
+    @property
+    def is_put(self) -> bool:
+        return self.option_type.upper() == "PUT"
+
 @dataclass
 class TickerBias:
     ticker: str
@@ -146,6 +174,12 @@ class TickerBias:
     seller_premium: float = 0.0   # NEW: premium where aggressor == Seller
 
     dominant_contract: Optional[DominantContract] = None
+
+    # ── OI confirmation (populated by OIJoiner) ───────────────────────────
+    oi_call_growth:   int   = 0     # total OI growth across call contracts
+    oi_put_growth:    int   = 0     # total OI growth across put contracts
+    oi_confirmed:     bool  = False # True when OI direction matches bias
+    oi_top_contract:  Optional["OIConfirmation"] = None  # highest OI growth contract
 
     # ── Pure directional flags ─────────────────────────────────────────────
 
@@ -236,11 +270,24 @@ class TickerBias:
 
     @property
     def signal_strength(self) -> str:
-        if self.consecutive_days >= 3 and self.total_premium >= 1_000_000:
+        """
+        Strong:   3+ days AND $1M+ premium
+        Strong ✓: same + OI confirmed (new positions match direction)
+        Moderate: 2+ days OR $500K+ premium
+        Weak:     everything else
+        """
+        base_strong = self.consecutive_days >= 3 and self.total_premium >= 1_000_000
+        if base_strong and self.oi_confirmed:
+            return "Strong ✓"
+        if base_strong:
             return "Strong"
         if self.consecutive_days >= 2 or self.total_premium >= 500_000:
             return "Moderate"
         return "Weak"
+
+    @property
+    def is_strong(self) -> bool:
+        return self.signal_strength in ("Strong", "Strong ✓")
 
     def __str__(self) -> str:
         dom = f" | Top: {self.dominant_contract}" if self.dominant_contract else ""
