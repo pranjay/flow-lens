@@ -90,7 +90,11 @@ class ExcelReporter:
         ("Call Volume",         12), ("Put Volume",     12),
         ("Call Premium ($)",    14), ("Put Premium ($)", 14), ("Total Contracts",  15),
         ("OI Change",           11), ("Volume Change",  14),
-        # Dominant contract
+        # OI confirmation
+        ("OI Confirmed",        12), ("OI Call Growth", 14), ("OI Put Growth",    13),
+        ("OI Top Strike",       11), ("OI Top Type",     9), ("OI Top Expiry",    11),
+        ("OI Top DTE",           9), ("OI Top Delta",    10), ("OI Top Growth",   13),
+        # Dominant contract (volume)
         ("Top Strike",          10), ("Top Type",        8), ("Top Moneyness",    12),
         ("Top Expiry",          10), ("Top DTE",          8), ("Top Delta",         9),
         ("Top Aggressor",       12), ("Top Premium ($)", 14), ("Top Vol/OI",       10),
@@ -112,6 +116,14 @@ class ExcelReporter:
                 b.call_volume, b.put_volume,
                 round(b.call_premium, 0), round(b.put_premium, 0),
                 b.total_contracts, b.oi_change, b.volume_change,
+                "✓" if b.oi_confirmed else "",
+                b.oi_call_growth, b.oi_put_growth,
+                b.oi_top_contract.strike           if b.oi_top_contract else "",
+                b.oi_top_contract.option_type      if b.oi_top_contract else "",
+                b.oi_top_contract.expiration_label if b.oi_top_contract else "",
+                b.oi_top_contract.dte              if b.oi_top_contract else "",
+                round(b.oi_top_contract.delta, 3)  if b.oi_top_contract else "",
+                b.oi_top_contract.oi_change        if b.oi_top_contract else "",
                 dom.strike             if dom else "",
                 dom.option_type        if dom else "",
                 dom.moneyness          if dom else "",
@@ -123,6 +135,10 @@ class ExcelReporter:
                 dom.vol_oi_ratio       if dom else "",
                 f"{dom.volatility:.1%}" if dom else "",
             ])
+            # OI confirmation colour overlay — gold border on confirmed strong signals
+            if b.oi_confirmed and b.is_strong:
+                for cell in ws[ws.max_row]:
+                    cell.font = Font(bold=True)
             if b.signal_strength == "Strong":
                 fill = _GOLD
             elif b.bias == "Long":
